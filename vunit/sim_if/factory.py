@@ -12,6 +12,7 @@ import os
 from .activehdl import ActiveHDLInterface
 from .ghdl import GHDLInterface
 from .incisive import IncisiveInterface
+from .xcelium import XceliumInterface
 from .modelsim import ModelSimInterface
 from .nvc import NVCInterface
 from .rivierapro import RivieraProInterface
@@ -33,8 +34,9 @@ class SimulatorFactory(object):
             RivieraProInterface,
             ActiveHDLInterface,
             GHDLInterface,
-            IncisiveInterface,
             NVCInterface,
+            XceliumInterface,
+            IncisiveInterface,
         ]
 
     def _extract_compile_options(self):
