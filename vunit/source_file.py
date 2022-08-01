@@ -8,7 +8,7 @@
 Functionality to represent and operate on VHDL and Verilog source files
 """
 from pathlib import Path
-from typing import Union
+from typing import Union, Dict
 import logging
 from copy import copy
 import traceback
@@ -28,6 +28,7 @@ class SourceFile(object):
     """
     Represents a generic source file
     """
+    _global_compile_options : Dict
 
     def __init__(self, name, library, file_type):
         self.name = name
@@ -89,11 +90,14 @@ class SourceFile(object):
         else:
             self._compile_options[name] += value
 
+    def set_global_compile_options(self, global_options: Dict):
+        self._global_compile_options = global_options
+
     @property
     def compile_options(self):
         return self._compile_options
 
-    def get_compile_option(self, name):
+    def get_compile_option(self, name, include_global=True):
         """
         Return a copy of the compile option list
         """
@@ -102,15 +106,24 @@ class SourceFile(object):
         if name not in self._compile_options:
             self._compile_options[name] = []
 
-        return copy(self._compile_options[name])
+        if include_global and name in self._global_compile_options:
+            return copy(self._compile_options[name] + self._global_compile_options[name])
+        else:
+            return copy(self._compile_options[name])
 
-    def _compile_options_hash(self):
+    def _compile_options_hash(self, include_global=True):
         """
         Compute hash of compile options
 
         Needs to be updated if there are nested dictionaries
         """
-        return hash_string(repr(sorted(self._compile_options.items())))
+        if include_global:
+            return hash_string(
+                repr(sorted(self._compile_options.items()))
+                 + repr(sorted(self._global_compile_options.items()))
+                )
+        else:
+            return hash_string(repr(sorted(self._compile_options.items())))
 
     @property
     def content_hash(self):

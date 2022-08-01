@@ -10,6 +10,8 @@ Interface for the Cadence Xcelium simulator
 
 from pathlib import Path
 from os.path import relpath
+from typing import Dict
+from copy import copy
 import sys
 import os
 import subprocess
@@ -34,6 +36,7 @@ class XceliumInterface(  # pylint: disable=too-many-instance-attributes
     name = "xcelium"
     supports_gui_flag = True
     package_users_depend_on_bodies = False
+    incremental = False
 
     compile_options = [
         ListOfStringOption("xcelium.xrun_vhdl_flags"),
@@ -41,6 +44,8 @@ class XceliumInterface(  # pylint: disable=too-many-instance-attributes
     ]
 
     sim_options = [ListOfStringOption("xcelium.xrun_sim_flags")]
+
+    _global_compile_options : Dict
 
     @staticmethod
     def add_arguments(parser):
@@ -93,6 +98,7 @@ class XceliumInterface(  # pylint: disable=too-many-instance-attributes
         self, prefix, output_path, gui=False, log_level=None, cdslib=None, hdlvar=None
     ):
         SimulatorInterface.__init__(self, output_path, gui)
+        self._global_compile_options = {}
         self._prefix = prefix
         self._libraries = []
         self._log_level = log_level
@@ -152,6 +158,18 @@ define work "{2}/libraries/work"
                 self._cds_root_xrun, cds_root_virtuoso, self._output_path
             )
         write_file(self._cdslib, contents)
+
+    def set_global_compile_options(self, global_options: Dict):
+        self._global_compile_options = global_options
+
+    def get_global_compile_option(self, name):
+        """
+        Return a copy of the compile option list
+        """
+        if name not in self._global_compile_options:
+            self._global_compile_options[name] = []
+
+        return copy(self._global_compile_options[name])
 
     def setup_library_mapping(self, project):
         """
@@ -246,40 +264,12 @@ define work "{2}/libraries/work"
         printer.write("Compiling all source files")
         sys.stdout.flush()
         if self._compile_all_source_files(source_files_by_library, printer):
-            printer.write("All source files compiled!")
-        else:
-            printer.write("One or more source files failed to compile.")
-        exit()
-
-        for source_file in source_files:
-            printer.write(
-                f"Compiling into {(source_file.library.name + ':').ljust(max_library_name + 1)!s} "
-                f"{simplify_path(source_file.name).ljust(max_source_file_name)!s} "
-            )
-            sys.stdout.flush()
-            exit()
-            if source_file in source_files_to_skip:
-                printer.write("skipped", fg="rgi")
-                printer.write("\n")
-                continue
-
-            if self._compile_source_file(source_file, printer):
-                project.update(source_file)
-            else:
-                source_files_to_skip.update(dependency_graph.get_dependent([source_file]))
-                failures.append(source_file)
-
-                if not continue_on_error:
-                    break
-
-        if failures:
-            printer.write("Compile failed\n", fg="ri")
-            raise CompileError
-
-        if source_files:
+            printer.write("All source files compiled!\n")
             printer.write("Compile passed\n", fg="gi")
         else:
-            printer.write("Re-compile not needed\n")
+            printer.write("One or more source files failed to compile.\n")
+            printer.write("Compile failed\n", fg="ri")
+            raise CompileError
 
 
     @staticmethod
@@ -304,30 +294,33 @@ define work "{2}/libraries/work"
         """
         args = []
         args += ["-makelib %s" % library.directory]
-        args += ['-xmlibdirname "%s"' % str(Path(library.directory).parent)]
-        args += [
-            '-log "%s"'
-            % str(
-                Path(self._output_path)
-                / ("xrun_compile_library_%s.log" % library.name)
-            )
-        ]
+        search_list = []
 
         for source_file in source_files:
-            args += ["-filemap %s" % source_file.name]
-
+            unique_args = []
             if source_file.is_vhdl:
-                args += ["%s" % self._vhdl_std_opt(source_file.get_vhdl_standard())]
-                args += source_file.compile_options.get("xcelium.xrun_vhdl_flags", [])
+                unique_args += ["%s" % self._vhdl_std_opt(source_file.get_vhdl_standard())]
+                unique_args += source_file.get_compile_option("xcelium.xrun_vhdl_flags", include_global=False)
 
             if source_file.is_any_verilog:
-                args += source_file.compile_options.get("xcelium.xrun_verilog_flags", [])
+                unique_args += source_file.get_compile_option("xcelium.xrun_verilog_flags", include_global=False)
                 for include_dir in source_file.include_dirs:
-                    args += ['-incdir "%s"' % include_dir]
+                    if include_dir not in search_list:
+                        search_list.append(include_dir)
                 for key, value in source_file.defines.items():
-                    args += ["-define %s=%s" % (key, value.replace('"', '\\"'))]
+                    unique_args += ["-define %s=%s" % (key, value.replace('"', '\\"'))]
 
-            args += ["-endfilemap"]
+            args += [source_file.name]
+            if len(unique_args) > 0:
+                # args += ["-filemap %s" % source_file.name]
+                args += unique_args
+                # args += ["-endfilemap"]
+            else:
+                # args += [source_file.name]
+                pass
+
+        for include_dir in search_list:
+                args += ['-incdir "%s"' % include_dir]
 
         args += ["-endlib"]
         argsfile = str(
@@ -335,13 +328,14 @@ define work "{2}/libraries/work"
             / ("xrun_compile_library_%s.args" % library.name)
         )
         write_file(argsfile, "\n".join(args))
-        return ["-f", argsfile]
+        return ["-F", argsfile]
 
 
     def compile_all_files_command(self, source_files):
         """
         Return a command to compile all source files
         """
+        first_library = True
         cmd = str(Path(self._prefix) / "xrun")
         args = []
 
@@ -372,7 +366,14 @@ define work "{2}/libraries/work"
         # for "disciplines.vams" etc.
         args += ['-incdir "%s/tools/spectre/etc/ahdl/"' % self._cds_root_xrun]
 
+        args += self.get_global_compile_option("xcelium.xrun_vhdl_flags")
+        args += self.get_global_compile_option("xcelium.xrun_verilog_flags")
+
         for library, _source_files in source_files.items():
+            if first_library:
+                args += ['-xmlibdirname "%s"' % str(Path(library.directory).parent)]
+                first_library = False
+
             args += self._compile_all_files_in_library_subcommand(library, _source_files)
 
         argsfile = str(
@@ -380,7 +381,7 @@ define work "{2}/libraries/work"
             / ("xrun_compile_all.args")
         )
         write_file(argsfile, "\n".join(args))
-        return [cmd, "-f", argsfile]
+        return [cmd, "-F", argsfile]
 
     def compile_vhdl_file_command(self, source_file):
         """
@@ -419,7 +420,7 @@ define work "{2}/libraries/work"
             / ("xrun_compile_vhdl_file_%s.args" % source_file.library.name)
         )
         write_file(argsfile, "\n".join(args))
-        return [cmd, "-f", argsfile]
+        return [cmd, "-F", argsfile]
 
     def compile_verilog_file_command(self, source_file):
         """
@@ -469,7 +470,7 @@ define work "{2}/libraries/work"
             / ("xrun_compile_verilog_file_%s.args" % source_file.library.name)
         )
         write_file(argsfile, "\n".join(args))
-        return [cmd, "-f", argsfile]
+        return [cmd, "-F", argsfile]
 
     def create_library(self, library_name, library_path, mapped_libraries=None):
         """
@@ -587,7 +588,7 @@ define work "{2}/libraries/work"
             argsfile = "%s/xrun_%s.args" % (script_path, step)
             write_file(argsfile, "\n".join(args))
             if not run_command(
-                [cmd, "-f", relpath(argsfile, script_path)],
+                [cmd, "-F", relpath(argsfile, script_path)],
                 cwd=script_path,
                 env=self.get_env(),
             ):
