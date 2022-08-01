@@ -10,14 +10,16 @@ Interface for the Cadence Xcelium simulator
 
 from pathlib import Path
 from os.path import relpath
+import sys
 import os
 import subprocess
 import logging
 from ..exceptions import CompileError
-from ..ostools import write_file, file_exists
+from ..ostools import write_file, file_exists, simplify_path
 from ..vhdl_standard import VHDL
-from . import SimulatorInterface, run_command, ListOfStringOption
+from . import SimulatorInterface, run_command, ListOfStringOption, check_output
 from .cds_file import CDSFile
+from ..color_printer import NO_COLOR_PRINTER
 
 LOGGER = logging.getLogger(__name__)
 
@@ -116,7 +118,8 @@ class XceliumInterface(  # pylint: disable=too-many-instance-attributes
         """
         try:
             return subprocess.check_output(
-                [str(Path(self._prefix) / "cds_root"), "virtuoso"]
+                [str(Path(self._prefix) / "cds_root"), "virtuoso"],
+                stderr=subprocess.STDOUT
             ).splitlines()[0].decode()
         except subprocess.CalledProcessError:
             return None
@@ -148,7 +151,6 @@ define work "{2}/libraries/work"
 """.format(
                 self._cds_root_xrun, cds_root_virtuoso, self._output_path
             )
-
         write_file(self._cdslib, contents)
 
     def setup_library_mapping(self, project):
@@ -171,7 +173,114 @@ define work "{2}/libraries/work"
         if source_file.is_any_verilog:
             return self.compile_verilog_file_command(source_file)
 
+        LOGGER.error("Unknown file type: %s", source_file.file_type)
         raise CompileError
+
+    def _compile_all_source_files(self, source_files_by_library, printer):
+        """
+        Compiles all source files and prints status information
+        """
+        try:
+            command = self.compile_all_files_command(source_files_by_library)
+        except CompileError:
+            command = None
+            printer.write("failed", fg="ri")
+            printer.write("\n")
+            printer.write(f"File type not supported by {self.name!s} simulator\n")
+
+            return False
+
+        try:
+            output = check_output(command, env=self.get_env())
+            printer.write("passed", fg="gi")
+            printer.write("\n")
+            printer.write(output)
+
+        except subprocess.CalledProcessError as err:
+            printer.write("failed", fg="ri")
+            printer.write("\n")
+            printer.write(f"=== Command used: ===\n{subprocess.list2cmdline(command)!s}\n")
+            printer.write("\n")
+            printer.write(f"=== Command output: ===\n{err.output!s}\n")
+
+            return False
+
+        return True
+
+    def compile_source_files(
+        self,
+        project,
+        printer=NO_COLOR_PRINTER,
+        continue_on_error=False,
+        target_files=None,
+    ):
+        """
+        Use compile_source_file_command to compile all source_files
+        param: target_files: Given a list of SourceFiles only these and dependent files are compiled
+        """
+        dependency_graph = project.create_dependency_graph()
+        failures = []
+
+        if target_files is None:
+            source_files = project.get_files_in_compile_order(dependency_graph=dependency_graph)
+        else:
+            source_files = project.get_minimal_file_set_in_compile_order(target_files)
+
+        source_files_to_skip = set()
+
+        max_library_name = 0
+        max_source_file_name = 0
+        if source_files:
+            max_library_name = max(len(source_file.library.name) for source_file in source_files)
+            max_source_file_name = max(len(simplify_path(source_file.name)) for source_file in source_files)
+
+        source_files_by_library = {}
+        for source_file in source_files:
+            if source_file.library in source_files_by_library:
+                source_files_by_library[source_file.library].append(source_file)
+            else:
+                source_files_by_library[source_file.library] = [source_file]
+        # import pprint
+        # pprint.pprint(source_files_by_library)
+
+        printer.write("Compiling all source files")
+        sys.stdout.flush()
+        if self._compile_all_source_files(source_files_by_library, printer):
+            printer.write("All source files compiled!")
+        else:
+            printer.write("One or more source files failed to compile.")
+        exit()
+
+        for source_file in source_files:
+            printer.write(
+                f"Compiling into {(source_file.library.name + ':').ljust(max_library_name + 1)!s} "
+                f"{simplify_path(source_file.name).ljust(max_source_file_name)!s} "
+            )
+            sys.stdout.flush()
+            exit()
+            if source_file in source_files_to_skip:
+                printer.write("skipped", fg="rgi")
+                printer.write("\n")
+                continue
+
+            if self._compile_source_file(source_file, printer):
+                project.update(source_file)
+            else:
+                source_files_to_skip.update(dependency_graph.get_dependent([source_file]))
+                failures.append(source_file)
+
+                if not continue_on_error:
+                    break
+
+        if failures:
+            printer.write("Compile failed\n", fg="ri")
+            raise CompileError
+
+        if source_files:
+            printer.write("Compile passed\n", fg="gi")
+        else:
+            printer.write("Re-compile not needed\n")
+
 
     @staticmethod
     def _vhdl_std_opt(vhdl_standard):
@@ -188,6 +297,90 @@ define work "{2}/libraries/work"
             return "-v93"
 
         raise ValueError("Invalid VHDL standard %s" % vhdl_standard)
+
+    def _compile_all_files_in_library_subcommand(self, library, source_files):
+        """
+        Return a command to compile all source files in a library
+        """
+        args = []
+        args += ["-makelib %s" % library.directory]
+        args += ['-xmlibdirname "%s"' % str(Path(library.directory).parent)]
+        args += [
+            '-log "%s"'
+            % str(
+                Path(self._output_path)
+                / ("xrun_compile_library_%s.log" % library.name)
+            )
+        ]
+
+        for source_file in source_files:
+            args += ["-filemap %s" % source_file.name]
+
+            if source_file.is_vhdl:
+                args += ["%s" % self._vhdl_std_opt(source_file.get_vhdl_standard())]
+                args += source_file.compile_options.get("xcelium.xrun_vhdl_flags", [])
+
+            if source_file.is_any_verilog:
+                args += source_file.compile_options.get("xcelium.xrun_verilog_flags", [])
+                for include_dir in source_file.include_dirs:
+                    args += ['-incdir "%s"' % include_dir]
+                for key, value in source_file.defines.items():
+                    args += ["-define %s=%s" % (key, value.replace('"', '\\"'))]
+
+            args += ["-endfilemap"]
+
+        args += ["-endlib"]
+        argsfile = str(
+            Path(self._output_path)
+            / ("xrun_compile_library_%s.args" % library.name)
+        )
+        write_file(argsfile, "\n".join(args))
+        return ["-f", argsfile]
+
+
+    def compile_all_files_command(self, source_files):
+        """
+        Return a command to compile all source files
+        """
+        cmd = str(Path(self._prefix) / "xrun")
+        args = []
+
+        args += ["-compile"]
+        args += ["-nocopyright"]
+        args += ["-licqueue"]
+        # "Ignored unexpected semicolon following SystemVerilog description keyword (endfunction)."
+        args += ["-nowarn UEXPSC"]
+        # "cds.lib Invalid path"
+        args += ["-nowarn DLCPTH"]
+        # "cds.lib Invalid environment variable ''."
+        args += ["-nowarn DLCVAR"]
+        args += ["-work work"]
+        args += ['-cdslib "%s"' % self._cdslib]
+        args += self._hdlvar_args()
+        args += [
+            '-log "%s"'
+            % str(
+                Path(self._output_path)
+                / ("xrun_compile_all.log")
+            )
+        ]
+        if not self._log_level == "debug":
+            args += ["-quiet"]
+        else:
+            args += ["-messages"]
+            args += ["-libverbose"]
+        # for "disciplines.vams" etc.
+        args += ['-incdir "%s/tools/spectre/etc/ahdl/"' % self._cds_root_xrun]
+
+        for library, _source_files in source_files.items():
+            args += self._compile_all_files_in_library_subcommand(library, _source_files)
+
+        argsfile = str(
+            Path(self._output_path)
+            / ("xrun_compile_all.args")
+        )
+        write_file(argsfile, "\n".join(args))
+        return [cmd, "-f", argsfile]
 
     def compile_vhdl_file_command(self, source_file):
         """

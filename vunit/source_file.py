@@ -36,6 +36,7 @@ class SourceFile(object):
         self.design_units = []
         self._content_hash = None
         self._compile_options = {}
+        self._global_compile_options = {}
 
         # The file name before preprocessing
         self.original_name = name
