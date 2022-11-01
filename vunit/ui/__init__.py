@@ -16,7 +16,8 @@ import traceback
 import logging
 import json
 import os
-from typing import Optional, Set, Union
+from copy import copy
+from typing import Optional, Set, Union, Dict
 from pathlib import Path
 from fnmatch import fnmatch
 
@@ -54,6 +55,7 @@ class VUnit(object):  # pylint: disable=too-many-instance-attributes, too-many-p
 
        from vunit import VUnit
     """
+    _global_compile_options : Dict
 
     @classmethod
     def from_argv(
@@ -188,6 +190,7 @@ See https://github.com/VUnit/vunit/issues/777.
 """
             )
             print(hline)
+        self._global_compile_options = {}
 
     def _create_database(self):
         """
@@ -486,6 +489,26 @@ See https://github.com/VUnit/vunit/issues/777.
         source_files = self._project.get_source_files_in_order()
         for source_file in check_not_empty(source_files, allow_empty, "No source files found"):
             source_file.add_compile_option(name, value)
+
+
+    def set_global_compile_options(self, name: str, value: str, allow_empty: Optional[bool] = False):
+        self._global_compile_options[name] = copy(value)
+
+        source_files = self._project.get_source_files_in_order()
+        for source_file in check_not_empty(source_files, allow_empty, "No source files found"):
+            source_file.set_global_compile_options(self._global_compile_options)
+
+
+    def add_global_compile_options(self, name: str, value: str, allow_empty: Optional[bool] = False):
+        if name not in self._global_compile_options:
+            self._global_compile_options[name] = copy(value)
+        else:
+            self._global_compile_options[name] += value
+
+        source_files = self._project.get_source_files_in_order()
+        for source_file in check_not_empty(source_files, allow_empty, "No source files found"):
+            source_file.set_global_compile_options(self._global_compile_options)
+
 
     def get_source_file(self, file_name: Union[str, Path], library_name: Optional[str] = None):
         """
@@ -802,6 +825,11 @@ other preprocessors. Lowest value first. The order between preprocessors with th
         Main with running tests
         """
         simulator_if = self._create_simulator_if()
+        try:
+            simulator_if.set_global_compile_options(self._global_compile_options)
+        except Exception as e:
+            pass
+
         test_list = self._create_tests(simulator_if)
         self._compile(simulator_if)
         print()
