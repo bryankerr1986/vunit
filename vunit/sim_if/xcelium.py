@@ -313,7 +313,10 @@ define work "{2}/libraries/work"
             return "-v200x -extv200x"
 
         if vhdl_standard == VHDL.STD_2008:
-            return "-v200x -extv200x -inc_v200x_pkg"
+            return "-v200x -extv200x"
+
+        if vhdl_standard == VHDL.STD_2019:
+            return "-v2019"
 
         if vhdl_standard == VHDL.STD_1993:
             return "-v93"
@@ -399,6 +402,8 @@ define work "{2}/libraries/work"
             args += ["-libverbose"]
         # for "disciplines.vams" etc.
         args += ['-incdir "%s/tools/spectre/etc/ahdl/"' % self._cds_root_xrun]
+
+        args += self.get_global_compile_option("xcelium.xrun_arg")
 
         args += self.get_global_compile_option("xcelium.xrun_vhdl_flags")
         args += self.get_global_compile_option("xcelium.xrun_verilog_flags")

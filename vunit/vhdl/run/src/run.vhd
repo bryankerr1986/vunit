@@ -125,7 +125,8 @@ package body run_pkg is
     end if;
 
     if not p_simulation_exit_is_disabled(runner_state) then
-      core_pkg.stop(0);
+      -- core_pkg.stop(0);
+      core_pkg.stop(1);
     end if;
 
   end procedure test_runner_cleanup;
