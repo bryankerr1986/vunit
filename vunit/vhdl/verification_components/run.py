@@ -170,4 +170,9 @@ TB_AXI_STREAM.test("test random check stall on slave").add_config(
     name="stall_slave", generics=dict(g_stall_percentage_slave=40)
 )
 
+XCELIUM_PATH = "/home/bryan/cadence/installs/XCELIUM2303"
+OSVVM_PATH = f"{XCELIUM_PATH}/tools/inca/files/OSVVM.src/cds.lib"
+UI.set_global_compile_options("xcelium.xrun_cdslib", [f"INCLUDE {OSVVM_PATH}"])
+
+
 UI.main()

@@ -3,7 +3,7 @@
 // You can obtain one at http://mozilla.org/MPL/2.0/.
 //
 // Copyright (c) 2014-2023, Lars Asplund lars.anders.asplund@gmail.com
-
+`timescale 1 ns / 1 ps;
 package vunit_pkg;
 
 class test_runner;

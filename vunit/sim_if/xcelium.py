@@ -292,10 +292,12 @@ define work "{2}/libraries/work"
                 source_files_by_library[source_file.library] = [source_file]
         # import pprint
         # pprint.pprint(source_files_by_library)
+        ordered_libraries = dict(sorted(source_files_by_library.items(), 
+                                key=lambda item: (item[0].name != 'vunit_lib', item[0].name)))
 
         printer.write("Compiling all source files")
         sys.stdout.flush()
-        if self._compile_all_source_files(source_files_by_library, printer):
+        if self._compile_all_source_files(ordered_libraries, printer):
             printer.write("All source files compiled!\n")
             printer.write("Compile passed\n", fg="gi")
         else:

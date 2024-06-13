@@ -10,10 +10,6 @@
 module tb_with_parameter_config;
 
    parameter string output_path = "";
-   parameter string set_parameter = "default";
-   parameter string config_parameter = "default";
-   parameter string lib_parameter = "default";
-   parameter string libs_parameter = "default";
 
    `TEST_SUITE begin
       `CHECK_EQUAL(lib_parameter, "set-for-lib");
